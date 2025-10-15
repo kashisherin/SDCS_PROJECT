@@ -1,0 +1,235 @@
+% COMPLETE DIGITAL COMMUNICATION SYSTEM - ASK MODULATION
+clc; clear all; close all;
+
+%% PARAMETERS
+text_message = 'HELLO AID';
+samples_per_bit = 100;
+bit_rate = 1000;
+carrier_freq = 10e3;
+
+% CHANGE THIS LINE TO TEST DIFFERENT SCENARIOS:
+snr_dB = 5;    % ⬅️ Change this value and re-run
+
+sync_pattern = [1 0 1 0 1 0 1 0];
+
+%% STEP 1: TEXT TO BINARY
+disp(['Original Message: ', text_message]);
+ascii_values = double(text_message);
+binary_stream = [];
+for i = 1:length(ascii_values)
+    binary_char = dec2bin(ascii_values(i), 8);
+    binary_stream = [binary_stream, binary_char - '0'];
+end
+
+frame = [sync_pattern, binary_stream];
+
+%% STEP 2: BASEBAND SIGNAL GENERATION
+bit_duration = 1/bit_rate;
+t_bit = 0:bit_duration/samples_per_bit:bit_duration - bit_duration/samples_per_bit;
+
+baseband_signal = [];
+for i = 1:length(frame)
+    if frame(i) == 1
+        pulse = ones(1, samples_per_bit);
+    else
+        pulse = -ones(1, samples_per_bit);
+    end
+    baseband_signal = [baseband_signal, pulse];
+end
+
+t_total = 0:bit_duration/samples_per_bit:length(frame)*bit_duration - bit_duration/samples_per_bit;
+
+%% STEP 3: ASK MODULATION
+carrier = cos(2*pi*carrier_freq*t_total);
+ask_signal = baseband_signal .* carrier;
+
+%% STEP 4: CHANNEL (ADD NOISE)
+received_signal = awgn(ask_signal, snr_dB, 'measured');
+
+%% STEP 5: DEMODULATION
+demod_signal = received_signal .* carrier * 2;
+
+% Low-pass filter
+sampling_rate = samples_per_bit * bit_rate;
+cutoff_freq = bit_rate * 2;
+nyquist_rate = sampling_rate / 2;
+normalized_cutoff = cutoff_freq / nyquist_rate;
+
+filter_order = 100;
+b = fir1(filter_order, normalized_cutoff);
+filtered_signal = filter(b, 1, demod_signal);
+
+% Compensate for filter delay
+filter_delay = filter_order / 2;
+filtered_signal = [filtered_signal(filter_delay+1:end), zeros(1, filter_delay)];
+
+%% STEP 6: BIT DECISION
+recovered_bits = [];
+for i = 1:length(frame)
+    sample_index = round((i-0.5) * samples_per_bit);
+    if sample_index > length(filtered_signal)
+        sample_index = length(filtered_signal);
+    end
+    sample_value = filtered_signal(sample_index);
+    
+    if sample_value > 0
+        recovered_bits(i) = 1;
+    else
+        recovered_bits(i) = 0;
+    end
+end
+
+%% STEP 7: FRAME SYNCHRONIZATION AND TEXT RECOVERY
+found_sync = false;
+start_index = 0;
+for i = 1:length(recovered_bits) - length(sync_pattern) + 1
+    if isequal(recovered_bits(i:i+length(sync_pattern)-1), sync_pattern)
+        found_sync = true;
+        start_index = i + length(sync_pattern);
+        break;
+    end
+end
+
+if found_sync
+    message_bits = recovered_bits(start_index:start_index + length(binary_stream) - 1);
+    
+    recovered_text = '';
+    for i = 1:8:length(message_bits)
+        if i+7 <= length(message_bits)
+            binary_char = message_bits(i:i+7);
+            ascii_val = bin2dec(num2str(binary_char));
+            recovered_text = [recovered_text, char(ascii_val)];
+        end
+    end
+else
+    recovered_text = 'SYNC FAILED';
+end
+
+%% STEP 8: RESULTS AND PLOTS
+figure('Position', [100, 100, 1200, 800]);
+
+% Plot 1: Bit sequence
+subplot(3,2,1);
+stem(frame, 'r', 'filled', 'MarkerSize', 4);
+title('Original Bit Sequence');
+xlabel('Bit Index'); ylabel('Amplitude'); grid on;
+
+% Plot 2: Baseband signal
+subplot(3,2,2);
+plot(t_total*1000, baseband_signal, 'b', 'LineWidth', 1.5);
+title('Baseband Signal'); xlabel('Time (ms)'); ylabel('Amplitude'); grid on;
+
+% Plot 3: ASK modulated signal
+subplot(3,2,3);
+plot(t_total(1:1000)*1000, ask_signal(1:1000), 'm', 'LineWidth', 1.5);
+title('ASK Modulated Signal'); xlabel('Time (ms)'); ylabel('Amplitude'); grid on;
+
+% Plot 4: Received signal with noise
+subplot(3,2,4);
+plot(t_total(1:1000)*1000, received_signal(1:1000), 'r', 'LineWidth', 1);
+title('Received Signal (With Noise)'); xlabel('Time (ms)'); ylabel('Amplitude'); grid on;
+
+% Plot 5: Filtered signal after demodulation
+subplot(3,2,5);
+plot(t_total*1000, filtered_signal, 'g', 'LineWidth', 1.5);
+title('Filtered Signal After Demodulation'); xlabel('Time (ms)'); ylabel('Amplitude'); grid on;
+
+% Plot 6: Decision points
+subplot(3,2,6);
+plot(t_total*1000, filtered_signal, 'b', 'LineWidth', 1);
+hold on;
+for i = 1:length(frame)
+    sample_time = ((i-0.5) * samples_per_bit * bit_duration/samples_per_bit) * 1000;
+    sample_idx = round((i-0.5)*samples_per_bit);
+    if sample_idx <= length(filtered_signal)
+        if recovered_bits(i) == 1
+            plot(sample_time, filtered_signal(sample_idx), 'ro', 'MarkerSize', 6, 'LineWidth', 2);
+        else
+            plot(sample_time, filtered_signal(sample_idx), 'go', 'MarkerSize', 6, 'LineWidth', 2);
+        end
+    end
+end
+title('Decision Points'); xlabel('Time (ms)'); ylabel('Amplitude'); 
+legend('Filtered', '"1" Decisions', '"0" Decisions'); grid on;
+
+sgtitle('Complete Digital Communication System - ASK Modulation/Demodulation', 'FontSize', 14, 'FontWeight', 'bold');
+
+%% DISPLAY RESULTS
+disp(' ');
+disp('=== DEMODULATION RESULTS ===');
+disp(['Original Message:  "', text_message, '"']);
+disp(['Recovered Message: "', recovered_text, '"']);
+
+if strcmp(text_message, recovered_text)
+    disp('✅ SUCCESS: Message recovered perfectly!');
+else
+    disp('❌ ERROR: Message recovery failed');
+end
+
+if found_sync
+    errors = sum(message_bits ~= binary_stream);
+    ber = errors / length(binary_stream);
+    fprintf('Bit Errors: %d/%d\n', errors, length(binary_stream));
+    fprintf('Bit Error Rate (BER): %.4f\n', ber);
+end
+%% AUTOMATED SNR TESTING
+fprintf('\n\n=== AUTOMATED SNR TESTING ===\n');
+
+test_snrs = [15, 10, 5, 2];  % SNR values to test
+test_results = {};
+
+for test_idx = 1:length(test_snrs)
+    current_snr = test_snrs(test_idx);
+    fprintf('\n--- Testing with SNR = %d dB ---\n', current_snr);
+    
+    % Re-run the communication system with current SNR
+    % [COPY YOUR MAIN CODE HERE, but replace snr_dB with current_snr]
+    
+    % Store results
+    test_results{test_idx}.snr = current_snr;
+    test_results{test_idx}.original_message = text_message;
+    test_results{test_idx}.recovered_message = recovered_text;
+    test_results{test_idx}.success = strcmp(text_message, recovered_text);
+    
+    if found_sync && exist('message_bits', 'var')
+        errors = sum(message_bits ~= binary_stream);
+        ber = errors / length(binary_stream);
+        test_results{test_idx}.ber = ber;
+        test_results{test_idx}.errors = errors;
+    else
+        test_results{test_idx}.ber = NaN;
+        test_results{test_idx}.errors = NaN;
+    end
+    
+    % Display immediate result
+    if test_results{test_idx}.success
+        fprintf('✅ SUCCESS: Message recovered perfectly!\n');
+    else
+        fprintf('❌ FAILED: Message recovery failed\n');
+    end
+    if ~isnan(test_results{test_idx}.ber)
+        fprintf('Bit Errors: %d/%d, BER: %.4f\n', ...
+                test_results{test_idx}.errors, length(binary_stream), test_results{test_idx}.ber);
+    end
+end
+
+% Display summary table
+fprintf('\n=== TEST SUMMARY ===\n');
+fprintf('SNR (dB) | Success | Bit Errors | BER\n');
+fprintf('---------|---------|------------|---------\n');
+for i = 1:length(test_results)
+    if test_results{i}.success
+        success_str = 'YES';
+    else
+        success_str = 'NO';
+    end
+    if isnan(test_results{i}.errors)
+        error_str = 'SYNC FAIL';
+        ber_str = 'SYNC FAIL';
+    else
+        error_str = sprintf('%d/%d', test_results{i}.errors, length(binary_stream));
+        ber_str = sprintf('%.4f', test_results{i}.ber);
+    end
+    fprintf('   %2d    |   %3s   |  %8s  | %s\n', ...
+            test_results{i}.snr, success_str, error_str, ber_str);
+end
